@@ -13,16 +13,12 @@ public class UsuarioMapper {
                 usuarioData.getIdcard(),
                 usuarioData.getName(),
                 usuarioData.getLastname(),
-                usuarioData.getPassword(),
                 usuarioData.getEmail(),
+                usuarioData.getPassword(),
                 usuarioData.getPhone(),
-                usuarioData.getAge(),
-                usuarioData.getState(),
                 usuarioData.getRol(),
-                usuarioData.getUsername()
-
+                usuarioData.getState()
         );
-
     }
 
     public UsuarioData toUsuarioData(Usuario usuario){
@@ -31,15 +27,11 @@ public class UsuarioMapper {
                 usuario.getIdcard(),
                 usuario.getName(),
                 usuario.getLastname(),
-                usuario.getPassword(),
                 usuario.getEmail(),
+                usuario.getPassword(),
                 usuario.getPhone(),
-                usuario.getAge(),
-                usuario.getState(),
                 usuario.getRol(),
-                usuario.getUsername()
-
-
+                usuario.getState()
         );
     }
 }

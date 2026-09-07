@@ -15,9 +15,7 @@ public class Usuario {
     private String name;
     private String lastname;
     private String email;
-    private String username;
     private String password;
-    private Integer age;
     private String phone;
     private String rol;
     private String state;
