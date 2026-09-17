@@ -8,6 +8,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
 import org.springframework.stereotype.Component;
@@ -40,11 +41,26 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             Usuario usuario = usuarioUsecase.buscarUsuarioEmail(email);
             if (usuario != null && jwtService.isTokenValid(jwt, email)) {
                 UsernamePasswordAuthenticationToken authToken =
-                        new UsernamePasswordAuthenticationToken(email, null, List.of());
+                        new UsernamePasswordAuthenticationToken(email, null,
+                                List.of(new SimpleGrantedAuthority(autoridad(usuario.getRol()))));
                 authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
                 SecurityContextHolder.getContext().setAuthentication(authToken);
             }
         }
         filterChain.doFilter(request, response);
+    }
+
+    private String autoridad(String rol) {
+        if (rol == null || rol.isBlank()) {
+            return "ROLE_USUARIO";
+        }
+        String normalizado = rol.toUpperCase();
+        if (normalizado.contains("ADMIN")) {
+            return "ROLE_ADMINISTRADOR";
+        }
+        if (normalizado.contains("GESTOR")) {
+            return "ROLE_GESTOR";
+        }
+        return "ROLE_" + normalizado.replaceAll("[^A-Z_]", "_");
     }
 }
