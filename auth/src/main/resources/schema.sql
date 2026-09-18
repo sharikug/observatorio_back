@@ -135,3 +135,16 @@ CREATE INDEX IF NOT EXISTS idx_participacion_proyecto ON participacion (id_proye
 CREATE INDEX IF NOT EXISTS idx_participacion_grupo ON participacion (id_grupo);
 CREATE INDEX IF NOT EXISTS idx_proyecto_grupo_proyecto ON proyecto_grupo (id_proyecto);
 CREATE INDEX IF NOT EXISTS idx_proyecto_grupo_grupo ON proyecto_grupo (id_grupo);
+
+CREATE TABLE IF NOT EXISTS reporte_generado (
+    id_reporte TEXT PRIMARY KEY,
+    email TEXT,
+    titulo TEXT,
+    tipo TEXT,
+    filtros TEXT,
+    fecha_generacion TIMESTAMP,
+    nombre_archivo TEXT,
+    archivo BYTEA
+);
+
+CREATE INDEX IF NOT EXISTS idx_reporte_generado_email ON reporte_generado (email);

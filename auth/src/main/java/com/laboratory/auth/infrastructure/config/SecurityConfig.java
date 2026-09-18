@@ -39,6 +39,9 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/observatorio/importar").hasRole("ADMINISTRADOR")
+                        .requestMatchers(HttpMethod.POST, "/api/observatorio/reportes/generar").authenticated()
+                        .requestMatchers("/api/observatorio/reportes/historial",
+                                "/api/observatorio/reportes/*/descargar").authenticated()
                         .anyRequest().permitAll()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
