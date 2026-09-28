@@ -148,3 +148,85 @@ CREATE TABLE IF NOT EXISTS reporte_generado (
 );
 
 CREATE INDEX IF NOT EXISTS idx_reporte_generado_email ON reporte_generado (email);
+
+-- Modulo de IA -----------------------------------------------------------------
+-- HU-06: documentos cargados al asistente (RAG). roles_permitidos es CSV de roles
+-- autorizados; PUBLICO es visible para cualquier usuario autenticado.
+CREATE TABLE IF NOT EXISTS ia_documento (
+    id_documento TEXT PRIMARY KEY,
+    nombre TEXT,
+    tipo TEXT,
+    fuente TEXT,
+    autorizado BOOLEAN DEFAULT TRUE,
+    roles_permitidos TEXT,
+    estado TEXT,
+    fecha_carga TIMESTAMP
+);
+
+-- HU-04/05/06: fragmentos indexados. El embedding se guarda como JSON de flotantes.
+-- ponytail: similitud coseno en Java (O(n)); migrar a pgvector si el corpus crece.
+CREATE TABLE IF NOT EXISTS ia_fragmento (
+    id_fragmento BIGSERIAL PRIMARY KEY,
+    id_documento TEXT,
+    orden INTEGER,
+    contenido TEXT,
+    referencia TEXT,
+    embedding TEXT,
+    roles_permitidos TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_ia_fragmento_documento ON ia_fragmento (id_documento);
+
+-- HU-10: registro de trazabilidad de cada interaccion con el asistente.
+CREATE TABLE IF NOT EXISTS ia_auditoria (
+    id_auditoria BIGSERIAL PRIMARY KEY,
+    email TEXT,
+    rol TEXT,
+    pregunta TEXT,
+    fragmentos TEXT,
+    sql_generado TEXT,
+    respuesta TEXT,
+    en_alcance BOOLEAN,
+    latencia_ms BIGINT,
+    fecha TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ia_auditoria_fecha ON ia_auditoria (fecha);
+
+-- HU-04: diccionario de indicadores versionado como fuente autorizada.
+CREATE TABLE IF NOT EXISTS ia_indicador (
+    id_indicador TEXT PRIMARY KEY,
+    nombre TEXT,
+    definicion TEXT,
+    formula TEXT,
+    unidad TEXT,
+    fuente TEXT,
+    enlace TEXT,
+    version INTEGER
+);
+
+-- Excel activo e historial ------------------------------------------------------
+-- Solo el Excel ACTIVO alimenta dashboards e IA. Los anteriores se conservan aqui
+-- (contenido BYTEA) para poder consultarlos y descargarlos, nunca para analizarlos.
+CREATE TABLE IF NOT EXISTS excel_cargado (
+    id_excel TEXT PRIMARY KEY,
+    nombre TEXT,
+    tamano BIGINT,
+    contenido BYTEA,
+    estado TEXT,
+    fecha_carga TIMESTAMP,
+    fecha_historico TIMESTAMP,
+    usuario TEXT,
+    valido BOOLEAN,
+    criticas INTEGER,
+    advertencias INTEGER,
+    total_inconsistencias INTEGER,
+    detalle_validacion TEXT
+);
+
+-- Regla fundamental: la base de datos, no la aplicacion, garantiza un unico ACTIVO.
+-- Dos cargas simultaneas no pueden dejar dos filas en ACTIVO.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_excel_cargado_unico_activo
+    ON excel_cargado (estado) WHERE estado = 'ACTIVO';
+
+CREATE INDEX IF NOT EXISTS idx_excel_cargado_fecha ON excel_cargado (fecha_carga DESC);

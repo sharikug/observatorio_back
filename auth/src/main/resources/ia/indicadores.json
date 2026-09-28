@@ -1,0 +1,52 @@
+[
+  {
+    "id": "IND-01",
+    "nombre": "Proyectos por año",
+    "definicion": "Numero de proyectos de investigacion registrados en el Observatorio para un ano determinado.",
+    "formula": "COUNT(id_proyecto) agrupado por anio",
+    "unidad": "proyectos",
+    "fuente": "Tabla proyecto del Observatorio",
+    "enlace": "/investigacion/proyectos",
+    "version": 1
+  },
+  {
+    "id": "IND-02",
+    "nombre": "Produccion cientifica por grupo",
+    "definicion": "Cantidad de proyectos y productos asociados a un grupo de investigacion en un periodo.",
+    "formula": "COUNT(proyecto) agrupado por id_grupo y anio",
+    "unidad": "productos",
+    "fuente": "Tablas proyecto, proyecto_grupo y grupo",
+    "enlace": "/investigacion/grupos",
+    "version": 1
+  },
+  {
+    "id": "IND-03",
+    "nombre": "Tamano de equipo por proyecto",
+    "definicion": "Numero de integrantes que participan en la ejecucion de un proyecto.",
+    "formula": "valor de tamano_equipo en proyecto_equipo",
+    "unidad": "personas",
+    "fuente": "Tabla proyecto_equipo",
+    "enlace": "/investigacion/proyectos",
+    "version": 1
+  },
+  {
+    "id": "IND-04",
+    "nombre": "Proyectos por ODS",
+    "definicion": "Distribucion de proyectos segun los Objetivos de Desarrollo Sostenible que abordan.",
+    "formula": "COUNT(proyecto) agrupado por numero_ods",
+    "unidad": "proyectos",
+    "fuente": "Tablas proyecto_ods y ods",
+    "enlace": "/impacto",
+    "version": 1
+  },
+  {
+    "id": "IND-05",
+    "nombre": "Categorizacion Minciencias de grupos",
+    "definicion": "Categoria asignada por Minciencias a cada grupo de investigacion.",
+    "formula": "valor de categoria_minciencias en la tabla grupo",
+    "unidad": "categoria",
+    "fuente": "Tabla grupo",
+    "enlace": "/investigacion/grupos",
+    "version": 1
+  }
+]

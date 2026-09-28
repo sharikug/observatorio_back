@@ -38,10 +38,17 @@ public class SecurityConfig {
                         new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/api/auth/**").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/observatorio/importar").hasRole("ADMINISTRADOR")
+                        .requestMatchers(HttpMethod.POST, "/api/observatorio/importar",
+                                "/api/observatorio/importar/validar",
+                                "/api/observatorio/excel/activar").hasRole("ADMINISTRADOR")
+                        .requestMatchers("/api/observatorio/excel/**").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/observatorio/reportes/generar").authenticated()
                         .requestMatchers("/api/observatorio/reportes/historial",
                                 "/api/observatorio/reportes/*/descargar").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/ia/documentos",
+                                "/api/ia/contenido").hasRole("ADMINISTRADOR")
+                        .requestMatchers("/api/ia/auditoria/**", "/api/ia/auditoria").hasRole("ADMINISTRADOR")
+                        .requestMatchers("/api/ia/**").authenticated()
                         .anyRequest().permitAll()
                 )
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);

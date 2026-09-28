@@ -20,7 +20,6 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
@@ -28,90 +27,92 @@ public class ImportadorService {
 
     private static final String IMPORTADO = "IMPORTADO";
     private static final String MANUAL = "MANUAL";
-    private static final Set<String> NUMERICAS =
-            Set.of("anio", "orden_participacion", "numero_ods", "tamano_equipo");
 
     private final JdbcTemplate jdbc;
 
-    private final List<ImportarError> errores = new ArrayList<>();
-    private int creados;
-    private int actualizados;
-    private int omitidos;
-
     public ImportarResumen importar(MultipartFile file) {
-        errores.clear();
-        creados = 0;
-        actualizados = 0;
-        omitidos = 0;
+        Contador contador = new Contador();
         try (InputStream in = file.getInputStream(); Workbook wb = WorkbookFactory.create(in)) {
             DataFormatter fmt = new DataFormatter();
-            importarTabla(wb, fmt, "Facultades", "facultad", List.of("id_facultad"));
-            importarTabla(wb, fmt, "Programas", "programa", List.of("id_programa"));
-            importarTabla(wb, fmt, "Unidad_Regional", "unidad_regional", List.of("id_unidad_regional"));
-            importarTabla(wb, fmt, "Lineas_Translocales", "linea_translocal", List.of("id_linea"));
-            importarTabla(wb, fmt, "ODS", "ods", List.of("id_ods"));
-            importarTabla(wb, fmt, "Investigadores", "investigador", List.of("id_investigador"));
-            importarTabla(wb, fmt, "Facultades_Grupo", "facultad_grupo", List.of("id_facultad_grupo"));
-            importarTabla(wb, fmt, "Unidad_Regional_Grupo", "unidad_regional_grupo", List.of("id_unidad_regional_grupo"));
-            importarTabla(wb, fmt, "Programas_Grupo", "programa_grupo", List.of("id_programa_grupo"));
-            importarTabla(wb, fmt, "Grupos", "grupo", List.of("id_grupo"));
-            importarProyectos(wb, fmt);
-            importarTabla(wb, fmt, "Participacion", "participacion", List.of("id_participacion"));
-            importarTabla(wb, fmt, "Proyecto_Equipo", "proyecto_equipo", List.of("id_proyecto"));
-            importarTabla(wb, fmt, "Proyecto_Colaboracion_Grupo", "proyecto_colaboracion_grupo", List.of("id_colaboracion"));
-            importarTabla(wb, fmt, "Proyecto_Linea", "proyecto_linea", List.of("id_proyecto", "id_linea"));
-            importarTabla(wb, fmt, "Proyecto_ODS", "proyecto_ods", List.of("id_proyecto", "id_ods"));
-            importarTabla(wb, fmt, "Proyecto_Grupo", "proyecto_grupo", List.of("id_proyecto", "id_grupo"));
-            importarTabla(wb, fmt, "Grupo_Programa", "grupo_programa", List.of("id_grupo", "id_programa_grupo"));
+            for (ReglasImportacion.Regla regla : ReglasImportacion.HOJAS) {
+                if (regla.controlManual()) {
+                    importarProyectos(wb, fmt, regla, contador);
+                } else {
+                    importarTabla(wb, fmt, regla, contador);
+                }
+            }
         } catch (IOException e) {
             throw new IllegalArgumentException("No se pudo leer el archivo Excel: " + e.getMessage());
         }
-        return new ImportarResumen(creados, actualizados, omitidos, List.copyOf(errores));
+        return new ImportarResumen(contador.creados, contador.actualizados, contador.omitidos,
+                List.copyOf(contador.errores));
     }
 
-    private void importarProyectos(Workbook wb, DataFormatter fmt) {
-        importarHoja(wb, fmt, "Proyectos", f -> {
-            validarClaves(f, List.of("codigo_proyecto"));
+    /**
+     * Purga los datos que trajo el Excel anterior para que dashboards e IA no mezclen
+     * archivos. Se ejecuta justo antes de importar el nuevo Excel activo.
+     *
+     * <p>En las tablas con columna 'origen' solo se borra lo IMPORTADO: los proyectos
+     * corregidos a mano se preservan, que es lo que protege la regla controlManual.
+     * En el resto de tablas no existe esa marca, asi que se vacian por completo.
+     */
+    public void limpiar() {
+        for (ReglasImportacion.Regla regla : ReglasImportacion.HOJAS) {
+            if (regla.tieneOrigen()) {
+                jdbc.update("DELETE FROM " + regla.tabla() + " WHERE origen <> 'MANUAL'");
+            } else {
+                jdbc.update("DELETE FROM " + regla.tabla());
+            }
+        }
+    }
+
+    private void importarProyectos(Workbook wb, DataFormatter fmt,
+                                   ReglasImportacion.Regla regla, Contador contador) {
+        importarHoja(wb, fmt, regla, contador, f -> {
+            validarClaves(f, regla);
             String codigo = f.s("codigo_proyecto");
             if (MANUAL.equalsIgnoreCase(origenExistente(codigo))) {
-                omitidos++;
-                errores.add(new ImportarError("Proyectos", f.numero, "codigo_proyecto",
+                contador.omitidos++;
+                contador.errores.add(new ImportarError(regla.hoja(), f.numero, "codigo_proyecto",
                         "Registro con correccion manual no sobrescrito"));
                 return;
             }
-            LinkedHashMap<String, Object> cols = columnas(f);
+            LinkedHashMap<String, Object> cols = columnas(f, regla);
             cols.put("origen", IMPORTADO);
-            upsert("proyecto", List.of("codigo_proyecto"), cols);
+            upsert(regla.tabla(), regla.claves(), cols, contador);
         });
     }
 
-    private void importarTabla(Workbook wb, DataFormatter fmt, String hoja, String tabla, List<String> claves) {
-        importarHoja(wb, fmt, hoja, f -> {
-            validarClaves(f, claves);
-            upsert(tabla, claves, columnas(f));
+    private void importarTabla(Workbook wb, DataFormatter fmt,
+                               ReglasImportacion.Regla regla, Contador contador) {
+        importarHoja(wb, fmt, regla, contador, f -> {
+            validarClaves(f, regla);
+            upsert(regla.tabla(), regla.claves(), columnas(f, regla), contador);
         });
     }
 
-    private void importarHoja(Workbook wb, DataFormatter fmt, String hoja, FilaHandler handler) {
-        Sheet sh = wb.getSheet(hoja);
+    private void importarHoja(Workbook wb, DataFormatter fmt, ReglasImportacion.Regla regla,
+                              Contador contador, FilaHandler handler) {
+        Sheet sh = wb.getSheet(regla.hoja());
         if (sh == null) {
-            errores.add(new ImportarError(hoja, 0, "", "La hoja no existe en el archivo"));
+            contador.errores.add(new ImportarError(regla.hoja(), 0, "", "La hoja no existe en el archivo"));
             return;
         }
         for (Fila f : leer(sh, fmt)) {
             try {
                 handler.handle(f);
             } catch (DatoInvalido e) {
-                omitidos++;
-                errores.add(new ImportarError(hoja, f.numero, e.campo, e.getMessage()));
+                contador.omitidos++;
+                contador.errores.add(new ImportarError(regla.hoja(), f.numero, e.campo, e.getMessage()));
             } catch (RuntimeException e) {
-                omitidos++;
-                errores.add(new ImportarError(hoja, f.numero, "", e.getMessage()));
+                contador.omitidos++;
+                contador.errores.add(new ImportarError(regla.hoja(), f.numero, "", e.getMessage()));
             }
         }
     }
 
-    private void upsert(String tabla, List<String> claves, LinkedHashMap<String, Object> cols) {
+    private void upsert(String tabla, List<String> claves, LinkedHashMap<String, Object> cols,
+                        Contador contador) {
         String where = String.join(" AND ", claves.stream().map(c -> c + " = ?").toList());
         Object[] valoresClave = claves.stream().map(cols::get).toArray();
         Integer n = jdbc.queryForObject(
@@ -131,9 +132,9 @@ public class ImportadorService {
         jdbc.update("INSERT INTO " + tabla + " (" + columnas + ") VALUES (" + marcadores + ")" + conflicto,
                 cols.values().toArray());
         if (existe) {
-            actualizados++;
+            contador.actualizados++;
         } else {
-            creados++;
+            contador.creados++;
         }
     }
 
@@ -176,20 +177,20 @@ public class ImportadorService {
         return filas;
     }
 
-    private LinkedHashMap<String, Object> columnas(Fila f) {
+    private LinkedHashMap<String, Object> columnas(Fila f, ReglasImportacion.Regla regla) {
         LinkedHashMap<String, Object> cols = new LinkedHashMap<>();
         for (String h : f.cols.keySet()) {
-            cols.put(h, valor(f, h));
+            cols.put(h, valor(f, h, regla));
         }
         return cols;
     }
 
-    private Object valor(Fila f, String col) {
+    private Object valor(Fila f, String col, ReglasImportacion.Regla regla) {
         String v = f.s(col);
         if (v.isEmpty()) {
             return null;
         }
-        if (NUMERICAS.contains(col)) {
+        if (regla.numericas().contains(col)) {
             try {
                 return (int) Math.round(Double.parseDouble(v.replace(",", ".")));
             } catch (NumberFormatException e) {
@@ -199,12 +200,20 @@ public class ImportadorService {
         return v;
     }
 
-    private void validarClaves(Fila f, List<String> claves) {
-        for (String k : claves) {
+    private void validarClaves(Fila f, ReglasImportacion.Regla regla) {
+        for (String k : regla.claves()) {
             if (f.s(k).isEmpty()) {
                 throw new DatoInvalido(k, "campo obligatorio vacio");
             }
         }
+    }
+
+    /** Estado de una importacion. Antes era campo del servicio, y dos cargas simultaneas se pisaban. */
+    private static class Contador {
+        private final List<ImportarError> errores = new ArrayList<>();
+        private int creados;
+        private int actualizados;
+        private int omitidos;
     }
 
     public static class Fila {
