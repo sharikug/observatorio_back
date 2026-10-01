@@ -48,6 +48,12 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/ia/documentos",
                                 "/api/ia/contenido").hasRole("ADMINISTRADOR")
                         .requestMatchers("/api/ia/auditoria/**", "/api/ia/auditoria").hasRole("ADMINISTRADOR")
+                        // El chat es publico: se entra al modulo y se pregunta, sin login.
+                        // El aislamiento entre visitantes lo da X-Anon-Id, y el rol siempre
+                        // es EXTERNO, que solo alcanza documentos PUBLICO (HU-08).
+                        .requestMatchers(HttpMethod.POST, "/api/ia/chat",
+                                "/api/ia/conversaciones").permitAll()
+                        .requestMatchers("/api/ia/conversaciones/**").permitAll()
                         .requestMatchers("/api/ia/**").authenticated()
                         .anyRequest().permitAll()
                 )

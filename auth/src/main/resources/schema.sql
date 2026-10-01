@@ -163,6 +163,10 @@ CREATE TABLE IF NOT EXISTS ia_documento (
     fecha_carga TIMESTAMP
 );
 
+-- Quien subio el documento (HU-06/HU-23): sin esto no se puede auditar la ingesta.
+ALTER TABLE ia_documento ADD COLUMN IF NOT EXISTS usuario TEXT;
+ALTER TABLE ia_documento ADD COLUMN IF NOT EXISTS detalle_error TEXT;
+
 -- HU-04/05/06: fragmentos indexados. El embedding se guarda como JSON de flotantes.
 -- ponytail: similitud coseno en Java (O(n)); migrar a pgvector si el corpus crece.
 CREATE TABLE IF NOT EXISTS ia_fragmento (
@@ -192,6 +196,42 @@ CREATE TABLE IF NOT EXISTS ia_auditoria (
 );
 
 CREATE INDEX IF NOT EXISTS idx_ia_auditoria_fecha ON ia_auditoria (fecha);
+
+-- En bases creadas por una iteracion anterior, ia_auditoria quedo con otro conjunto de
+-- columnas y CREATE TABLE IF NOT EXISTS no la altera: el INSERT de HU-10 fallaba con
+-- "no existe la columna email" y cada consulta del asistente devolvia 500. Estas
+-- sentencia son idempotentes y no borran nada; conservan las columnas viejas, que el
+-- modulo ya no usa.
+ALTER TABLE ia_auditoria ADD COLUMN IF NOT EXISTS id_auditoria BIGSERIAL;
+ALTER TABLE ia_auditoria ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE ia_auditoria ADD COLUMN IF NOT EXISTS fragmentos TEXT;
+ALTER TABLE ia_auditoria ADD COLUMN IF NOT EXISTS sql_generado TEXT;
+ALTER TABLE ia_auditoria ADD COLUMN IF NOT EXISTS en_alcance BOOLEAN;
+
+-- HU-17/HU-30: memoria conversacional. Una conversacion pertenece a un usuario y
+-- solo su dueño la lee o la borra (HU-08). El historial es contexto para el modelo,
+-- nunca una via para saltar permisos: cada turno vuelve a recuperar y a filtrar.
+CREATE TABLE IF NOT EXISTS ia_conversacion (
+    id_conversacion TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    titulo TEXT,
+    creado TIMESTAMP,
+    actualizado TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ia_conversacion_email ON ia_conversacion (email, actualizado DESC);
+
+CREATE TABLE IF NOT EXISTS ia_mensaje (
+    id_mensaje BIGSERIAL PRIMARY KEY,
+    id_conversacion TEXT NOT NULL REFERENCES ia_conversacion (id_conversacion) ON DELETE CASCADE,
+    rol TEXT,
+    contenido TEXT,
+    fuentes TEXT,
+    en_alcance BOOLEAN,
+    creado TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ia_mensaje_conversacion ON ia_mensaje (id_conversacion, id_mensaje);
 
 -- HU-04: diccionario de indicadores versionado como fuente autorizada.
 CREATE TABLE IF NOT EXISTS ia_indicador (

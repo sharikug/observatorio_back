@@ -31,3 +31,11 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Configuracion local con secretos ###
+# Nunca versionar: aqui viven la clave de OPENROUTER_API_KEY y credenciales locales.
+application-local.properties
+application-local.yml
+application-local.yaml
+.env
+.env.*

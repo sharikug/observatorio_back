@@ -5,7 +5,7 @@ import com.laboratory.auth.observatorio.ia.api.dto.BorradorResponse;
 import com.laboratory.auth.observatorio.ia.api.dto.ChatResponse;
 import com.laboratory.auth.observatorio.ia.api.dto.ConsultaResultado;
 import com.laboratory.auth.observatorio.ia.api.dto.FuenteRecuperada;
-import com.laboratory.auth.observatorio.ia.client.GeminiClient;
+import com.laboratory.auth.observatorio.ia.client.OpenRouterClient;
 import com.laboratory.auth.observatorio.ia.conector.ExcelActivoConector;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -30,7 +30,8 @@ import java.util.stream.Collectors;
 public class IaChatService {
 
     public static final String LEYENDA_IA =
-            "Contenido generado por IA. Verifique las fuentes citadas antes de su uso oficial.";
+            "Contenido generado mediante Inteligencia Artificial. Este documento debe ser "
+                    + "revisado y validado antes de su uso institucional.";
 
     /**
      * Regla anti-invencion. Comparte el mismo texto en el chat y en los borradores para
@@ -79,13 +80,14 @@ public class IaChatService {
     private static final Pattern TABLA =
             Pattern.compile("\\b(?:from|join)\\s+([a-zA-Z_][a-zA-Z0-9_]*)", Pattern.CASE_INSENSITIVE);
 
-    private final GeminiClient gemini;
+    private final OpenRouterClient modelo;
     private final TextToSqlService textToSql;
     private final RagService rag;
     private final IndicadorService indicadores;
     private final AlcanceService alcance;
     private final AuditoriaService auditoria;
     private final ExcelActivoConector excelActivo;
+    private final ConversacionService conversacion;
     private final ObjectMapper mapper = new ObjectMapper();
 
     /** Fuente declarada de todo lo que el asistente responde, para mostrarla en pantalla. */
@@ -93,11 +95,28 @@ public class IaChatService {
         return excelActivo.etiquetaFuente();
     }
 
-    public ChatResponse responder(String email, String rol, String pregunta) {
+    public ChatResponse responder(String email, String rol, String pregunta, String idConversacion) {
         long inicio = System.currentTimeMillis();
-        if (!gemini.disponible()) {
+        // El primer turno abre la conversacion: el cliente no necesita crear nada,
+        // y asi ningun mensaje se pierde por no haber pedido un id antes.
+        String id = idConversacion == null || idConversacion.isBlank()
+                ? conversacion.crear(email) : idConversacion;
+        // HU-17: el historial entra al prompt, pero no a la recuperacion. Los permisos
+        // se revalidan en este mismo turno contra las fuentes, nunca por memoria.
+        String historial = conversacion.contexto(email, id);
+        conversacion.registrarMensaje(id, "user", pregunta, List.of(), null);
+        ChatResponse respuesta = responder(email, rol, pregunta, historial, inicio);
+        conversacion.registrarMensaje(id, "assistant", respuesta.respuesta(),
+                respuesta.fuentes(), respuesta.enAlcance());
+        return new ChatResponse(respuesta.respuesta(), respuesta.enAlcance(), respuesta.fuentes(),
+                respuesta.sql(), respuesta.latenciaMs(), respuesta.fuenteDatos(), id);
+    }
+
+    private ChatResponse responder(String email, String rol, String pregunta, String historial,
+                                   long inicio) {
+        if (!modelo.disponible()) {
             return registrar(email, rol, pregunta, List.of(), "", false,
-                    "El asistente no tiene configurada la clave del modelo (ia.gemini.api-key). "
+                    "El asistente no tiene configurada la clave del modelo (OPENROUTER_API_KEY). "
                             + "Contacte al administrador del sistema.", inicio);
         }
         if (pregunta == null || pregunta.isBlank()) {
@@ -110,7 +129,7 @@ public class IaChatService {
                     alcance.mensajeFueraDeAlcance(), inicio);
         }
 
-        Clasificacion clasificacion = clasificar(pregunta);
+        Clasificacion clasificacion = clasificar(pregunta, historial);
         ConsultaResultado datos = null;
         String sql = "";
         if ("DATOS".equals(clasificacion.intencion())) {
@@ -144,15 +163,27 @@ public class IaChatService {
                             + "(datos estructurados del Excel activo, diccionario de indicadores, "
                             + "contenido publicado o documentos cargados). No genero contenido "
                             + "especulativo. Si cree que el dato deberia existir, digame que campo "
-                            + "busca y revisamos si el archivo activo lo contiene.", inicio);
+                            + "busca y revisamos si el archivo activo lo contiene." + avisoRestringidos(rol),
+                    inicio);
         }
 
         String contexto = datos == null ? "" : contextoDatos(datos);
-        String respuesta = componer(pregunta, contexto, fuentes);
+        String respuesta = componer(pregunta, historial, contexto, fuentes);
         if (!indicadoresEncontrados.isEmpty()) {
             respuesta = respuesta + "\n\n" + textoIndicadores(indicadoresEncontrados);
         }
         return registrar(email, rol, pregunta, fuentes, sql, true, respuesta, inicio);
+    }
+
+    /**
+     * HU-08: avisa que parte de la fuente existe pero no le es legible. Se dice sin
+     * nombrarla, porque el nombre del documento ya seria informacion no autorizada.
+     */
+    private String avisoRestringidos(String rol) {
+        int restringidos = rag.restringidosPara(rol);
+        return restringidos == 0 ? ""
+                : " Parte de la informacion del Observatorio esta restringida a otros perfiles, "
+                + "por eso no puedo incluirla en esta respuesta.";
     }
 
     private String contextoDatos(ConsultaResultado resultado) {
@@ -188,28 +219,36 @@ public class IaChatService {
         }
         String sistema = REGLAS_FUENTE + "\n"
                 + "- El borrador es institucional y se apoya unicamente en el contexto entregado.\n"
-                + "- Estructura: titulo, resumen, hallazgos y conclusiones. Los hallazgos deben\n"
-                + "  distinguir que dato del archivo sostiene cada afirmacion.\n"
-                + "- Si el contexto no alcanza para alguna de las secciones, escribe que no hay\n"
-                + "  informacion disponible en el archivo activo.\n";
+                + "- Estructura obligatoria, con encabezados Markdown '##':\n"
+                + "  Resumen ejecutivo, Indicadores principales, Analisis, Hallazgos,\n"
+                + "  Limitaciones de los datos y Observaciones.\n"
+                + "- Cada encabezado de seccion debe iniciar con '## '. Usa '- ' para las listas\n"
+                + "  y tablas Markdown solo cuando comparen cifras entre categorias.\n"
+                + "- Cada cifra debe ir acompanada de la hoja y el dato del archivo activo que\n"
+                + "  la sostiene. No escribas una seccion que no puedas sostener: escribe que el\n"
+                + "  archivo activo no aporta ese dato.\n";
         String usuario = "Tema: " + request.tema() + "\nFiltros: " + String.join(", ", request.filtros())
                 + "\n\n" + contexto + "\n" + contextoDocumental(fuentes, List.of());
-        String borrador = gemini.disponible()
-                ? gemini.generar(sistema, LEYENDA_IA + "\n\n" + usuario)
-                : "El asistente no tiene configurada la clave del modelo (ia.gemini.api-key).";
+        String borrador = modelo.disponible()
+                ? modelo.generar(sistema, LEYENDA_IA + "\n\n" + usuario)
+                : "El asistente no tiene configurada la clave del modelo (OPENROUTER_API_KEY).";
         List<String> citas = new ArrayList<>(fuentes.stream().map(FuenteRecuperada::cita).toList());
         auditoria.registrar(email, rol, "Borrador: " + request.tema(), fuentes, "",
                 borrador, true, System.currentTimeMillis() - inicio);
         return new BorradorResponse(borrador, citas, LEYENDA_IA);
     }
 
-    private String componer(String pregunta, String contextoDatos, List<FuenteRecuperada> fuentes) {
+    private String componer(String pregunta, String historial, String contextoDatos,
+                           List<FuenteRecuperada> fuentes) {
         String sistema = REGLAS_FUENTE + "\n"
                 + "- Cuando cites un fragmento documental, menciona el documento y su referencia.\n"
                 + "- Cierra siempre con la linea: Fuente: <nombre del Excel activo>.\n"
                 + "- La respuesta es interna al Observatorio: no la redactes como un texto\n"
                 + "  dirigido a un destinatario externo.";
         StringBuilder sb = new StringBuilder();
+        if (historial != null && !historial.isBlank()) {
+            sb.append(historial);
+        }
         sb.append("Pregunta: ").append(pregunta).append("\n\n");
         String estructura = excelActivo.contexto();
         if (!estructura.isBlank()) {
@@ -227,7 +266,7 @@ public class IaChatService {
                 sb.append("- [").append(f.cita()).append("] ").append(f.contenido()).append('\n');
             }
         }
-        return gemini.generar(sistema, sb.toString());
+        return modelo.generar(sistema, sb.toString());
     }
 
     private String textoIndicadores(List<ObjectNode> encontrados) {
@@ -257,7 +296,7 @@ public class IaChatService {
         return sb.toString();
     }
 
-    private Clasificacion clasificar(String pregunta) {
+    private Clasificacion clasificar(String pregunta, String historial) {
         String sistema = """
                 Clasifica la pregunta de un usuario del Observatorio. Devuelve UNICAMENTE un JSON
                 valido con esta forma: {"intencion":"DATOS|DOCUMENTO","sql":""}.
@@ -266,9 +305,12 @@ public class IaChatService {
                 escribe en "sql" una consulta PostgreSQL de SOLO LECTURA (SELECT o WITH) valida.
                 Usa "DOCUMENTO" para explicaciones, definiciones, contenido institucional o
                 documentos. Sin texto adicional.
+                Si la pregunta usa pronombres o referencias ("ellos", "esos", "los anteriores"),
+                usa la conversacion previa para resolver a que se refiere.
                 Esquema:
                 """ + textToSql.descripcionEsquema();
-        String crudo = gemini.generar(sistema, pregunta);
+        String crudo = modelo.generar(sistema,
+                (historial == null ? "" : historial) + "Pregunta: " + pregunta);
         try {
             String json = crudo.substring(crudo.indexOf('{'), crudo.lastIndexOf('}') + 1);
             JsonNode n = mapper.readTree(json);
@@ -286,7 +328,7 @@ public class IaChatService {
         long latencia = System.currentTimeMillis() - inicio;
         auditoria.registrar(email, rol, pregunta, fuentes, sql, respuesta, enAlcance, latencia);
         List<String> citas = fuentes.stream().map(FuenteRecuperada::cita).collect(Collectors.toList());
-        return new ChatResponse(respuesta, enAlcance, citas, sql, latencia, fuente());
+        return new ChatResponse(respuesta, enAlcance, citas, sql, latencia, fuente(), null);
     }
 
     private String filasComoTexto(ConsultaResultado resultado) {

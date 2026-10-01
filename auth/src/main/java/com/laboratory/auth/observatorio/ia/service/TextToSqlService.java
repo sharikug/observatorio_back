@@ -1,7 +1,7 @@
 package com.laboratory.auth.observatorio.ia.service;
 
 import com.laboratory.auth.observatorio.ia.api.dto.ConsultaResultado;
-import com.laboratory.auth.observatorio.ia.client.GeminiClient;
+import com.laboratory.auth.observatorio.ia.client.OpenRouterClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -40,7 +40,7 @@ public class TextToSqlService {
     private static final Pattern LIMITE = Pattern.compile("\\blimit\\b", Pattern.CASE_INSENSITIVE);
 
     private final JdbcTemplate jdbc;
-    private final GeminiClient gemini;
+    private final OpenRouterClient modelo;
 
     private volatile String esquemaCache;
 
@@ -73,7 +73,7 @@ public class TextToSqlService {
                 - Si la pregunta no se puede responder con el esquema, responde: NO_DISPONIBLE
                 Esquema:
                 """ + descripcionEsquema();
-        return gemini.generar(sistema, pregunta).trim();
+        return modelo.generar(sistema, pregunta).trim();
     }
 
     public ConsultaResultado consultar(String pregunta) {

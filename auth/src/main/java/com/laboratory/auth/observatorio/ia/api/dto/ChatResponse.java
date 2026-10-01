@@ -9,6 +9,8 @@ public record ChatResponse(
         String sql,
         long latenciaMs,
         /** Excel ACTIVE del que proviene la respuesta, para que el usuario la vea. */
-        String fuenteDatos
+        String fuenteDatos,
+        /** HU-17: conversacion en la que quedo guardada esta respuesta, para continuarla. */
+        String conversacionId
 ) {
 }
