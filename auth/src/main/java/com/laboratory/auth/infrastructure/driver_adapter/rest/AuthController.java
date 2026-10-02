@@ -1,13 +1,14 @@
 package com.laboratory.auth.infrastructure.driver_adapter.rest;
 
+import com.laboratory.auth.domain.model.Rol;
 import com.laboratory.auth.domain.model.Usuario;
 import com.laboratory.auth.domain.usecase.UsuarioUsecase;
 import com.laboratory.auth.infrastructure.driver_adapter.rest.dto.AuthResponse;
 import com.laboratory.auth.infrastructure.driver_adapter.rest.dto.LoginRequest;
-import com.laboratory.auth.infrastructure.driver_adapter.rest.dto.MessageResponse;
 import com.laboratory.auth.infrastructure.driver_adapter.rest.dto.RegistroRequest;
 import com.laboratory.auth.infrastructure.security.JwtService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -26,8 +27,21 @@ public class AuthController {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
 
+    /**
+     * Codigo que convierte un registro en ADMINISTRADOR. Vive solo en el backend: el
+     * cliente lo manda, nunca lo decide. Si se deja vacio, la API no tiene forma de
+     * crear administradores y todos los registros quedan como ESTUDIANTE.
+     */
+    @Value("${app.registro.codigo-admin:}")
+    private String codigoAdmin;
+
     @PostMapping("/registro")
     public ResponseEntity<AuthResponse> registrar(@RequestBody RegistroRequest request) {
+        // La longitud se valida aqui, con el texto plano: mas abajo el caso ya solo
+        // conoce el hash, que siempre mide 60 caracteres y nunca falla la regla.
+        if (request.password() == null || request.password().length() < 8) {
+            throw new IllegalArgumentException("La contrasena debe tener al menos 8 caracteres");
+        }
         Usuario usuario = Usuario.builder()
                 .idcard(request.idcard())
                 .name(request.name())
@@ -35,7 +49,7 @@ public class AuthController {
                 .email(request.email())
                 .password(passwordEncoder.encode(request.password()))
                 .phone(request.phone())
-                .rol(request.rol())
+                .rol(resolverRol(request.codigoAdmin()))
                 .build();
 
         Usuario guardado = usuarioUsecase.registrarUsuario(usuario);
@@ -58,8 +72,13 @@ public class AuthController {
                 new AuthResponse(token, usuario.getName(), usuario.getRol()));
     }
 
-    @PostMapping("/logout")
-    public ResponseEntity<MessageResponse> logout() {
-        return ResponseEntity.ok(new MessageResponse("Sesion cerrada"));
+    /**
+     * Sin el codigo correcto el registro es siempre de estudiante. Un codigo en blanco
+     * o un backend sin codigo configurado nunca conceden el rol de administrador.
+     */
+    private String resolverRol(String codigo) {
+        boolean esAdmin = codigoAdmin != null && !codigoAdmin.isBlank()
+                && codigoAdmin.equals(codigo);
+        return esAdmin ? Rol.ADMINISTRADOR : Rol.ESTUDIANTE;
     }
 }

@@ -4,7 +4,7 @@ import com.laboratory.auth.observatorio.ia.api.dto.BorradorRequest;
 import com.laboratory.auth.observatorio.ia.api.dto.ChatResponse;
 import com.laboratory.auth.observatorio.ia.api.dto.ConsultaResultado;
 import com.laboratory.auth.observatorio.ia.api.dto.FuenteRecuperada;
-import com.laboratory.auth.observatorio.ia.client.OpenRouterClient;
+import com.laboratory.auth.observatorio.ia.client.ModeloCliente;
 import com.laboratory.auth.observatorio.ia.conector.ExcelActivoConector;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.junit.jupiter.api.Test;
@@ -28,7 +28,7 @@ class IaChatServiceTest {
 
     @Test
     void consultaElDocumentoCargadoCuandoLaConsultaDeDatosSaleVacia() {
-        OpenRouterClient modelo = mock(OpenRouterClient.class);
+        ModeloCliente modelo = mock(ModeloCliente.class);
         TextToSqlService textToSql = mock(TextToSqlService.class);
         RagService rag = mock(RagService.class);
         IndicadorService indicadores = mock(IndicadorService.class);
@@ -52,7 +52,7 @@ class IaChatServiceTest {
 
         IaChatService servicio = new IaChatService(modelo, textToSql, rag, indicadores, alcance,
                 auditoria, excel, new ConversacionService(mock(JdbcTemplate.class)));
-        ChatResponse respuesta = servicio.responder("analista@ucundinamarca.edu.co", "ANALISTA",
+        ChatResponse respuesta = servicio.responder("admin@ucundinamarca.edu.co", "ADMINISTRADOR",
                 "Que dice el informe cargado?", null);
 
         assertFalse(respuesta.respuesta().contains("No encontre"),
@@ -63,7 +63,7 @@ class IaChatServiceTest {
 
     @Test
     void sinExcelActivoNoAfilaCifrasDelObservatorio() {
-        OpenRouterClient modelo = mock(OpenRouterClient.class);
+        ModeloCliente modelo = mock(ModeloCliente.class);
         TextToSqlService textToSql = mock(TextToSqlService.class);
         RagService rag = mock(RagService.class);
         IndicadorService indicadores = mock(IndicadorService.class);
@@ -80,7 +80,7 @@ class IaChatServiceTest {
 
         IaChatService servicio = new IaChatService(modelo, textToSql, rag, indicadores, alcance,
                 auditoria, excel, new ConversacionService(mock(JdbcTemplate.class)));
-        ChatResponse respuesta = servicio.responder("analista@ucundinamarca.edu.co", "ANALISTA",
+        ChatResponse respuesta = servicio.responder("admin@ucundinamarca.edu.co", "ADMINISTRADOR",
                 "Cuantos proyectos hay?", null);
 
         assertTrue(respuesta.respuesta().contains("No hay ningun Excel activo"), respuesta.respuesta());
@@ -93,7 +93,7 @@ class IaChatServiceTest {
      */
     @Test
     void elModeloRecibeLasReglasAntiInvencionYElInventarioDelExcel() {
-        OpenRouterClient modelo = mock(OpenRouterClient.class);
+        ModeloCliente modelo = mock(ModeloCliente.class);
         TextToSqlService textToSql = mock(TextToSqlService.class);
         RagService rag = mock(RagService.class);
         IndicadorService indicadores = mock(IndicadorService.class);
@@ -121,7 +121,7 @@ class IaChatServiceTest {
 
         new IaChatService(modelo, textToSql, rag, indicadores, alcance, auditoria, excel,
                 new ConversacionService(mock(JdbcTemplate.class)))
-                .responder("analista@ucundinamarca.edu.co", "ANALISTA", "Cual es el proyecto mas antiguo?", null);
+                .responder("admin@ucundinamarca.edu.co", "ADMINISTRADOR", "Cual es el proyecto mas antiguo?", null);
 
         ArgumentCaptor<String> sistema = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> enviado = ArgumentCaptor.forClass(String.class);
@@ -130,7 +130,12 @@ class IaChatServiceTest {
         String instrucciones = sistema.getAllValues().stream()
                 .filter(s -> s.contains("PROHIBIDO INVENTAR")).findFirst().orElseThrow();
         assertTrue(instrucciones.contains("No inventes cifras"), instrucciones);
-        assertTrue(instrucciones.contains("si un campo no aparece en el"), instrucciones);
+        // El Excel sigue siendo el inventario completo: por eso el modelo puede afirmar
+        // que un campo no existe en el archivo.
+        assertTrue(instrucciones.contains("no existe en el archivo"), instrucciones);
+        // Los documentos cargados son fuente autorizada. Sin esta regla el modelo
+        // rechazaba responder desde el PDF y decia que el dato no existia en el Excel.
+        assertTrue(instrucciones.contains("Fragmentos autorizados"), instrucciones);
         assertTrue(instrucciones.contains("DATOS ENCONTRADOS"), instrucciones);
         assertTrue(instrucciones.contains("DEDUCCIONES"), instrucciones);
 
@@ -146,7 +151,7 @@ String prompt = enviado.getAllValues().stream()
 
     @Test
     void laReglaAntiInvencionTambienSeAplicaALosBorradores() {
-        OpenRouterClient modelo = mock(OpenRouterClient.class);
+        ModeloCliente modelo = mock(ModeloCliente.class);
         TextToSqlService textToSql = mock(TextToSqlService.class);
         RagService rag = mock(RagService.class);
         IndicadorService indicadores = mock(IndicadorService.class);

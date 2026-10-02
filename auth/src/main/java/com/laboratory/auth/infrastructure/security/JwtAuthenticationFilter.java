@@ -1,5 +1,6 @@
 package com.laboratory.auth.infrastructure.security;
 
+import com.laboratory.auth.domain.model.Rol;
 import com.laboratory.auth.domain.model.Usuario;
 import com.laboratory.auth.domain.usecase.UsuarioUsecase;
 import jakarta.servlet.FilterChain;
@@ -50,17 +51,15 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
+    /**
+     * Solo hay dos roles, asi que solo hay dos autoridades. Cualquier valor que no sea
+     * ADMINISTRADOR (incluido un null de una fila vieja) cae en ESTUDIANTE: los
+     * permisos de lectura nunca dependen de este filtro.
+     */
     private String autoridad(String rol) {
-        if (rol == null || rol.isBlank()) {
-            return "ROLE_USUARIO";
-        }
-        String normalizado = rol.toUpperCase();
-        if (normalizado.contains("ADMIN")) {
+        if (Rol.ADMINISTRADOR.equalsIgnoreCase(rol)) {
             return "ROLE_ADMINISTRADOR";
         }
-        if (normalizado.contains("GESTOR")) {
-            return "ROLE_GESTOR";
-        }
-        return "ROLE_" + normalizado.replaceAll("[^A-Z_]", "_");
+        return "ROLE_ESTUDIANTE";
     }
 }

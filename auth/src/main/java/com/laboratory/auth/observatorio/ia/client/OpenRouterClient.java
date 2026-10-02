@@ -2,6 +2,7 @@ package com.laboratory.auth.observatorio.ia.client;
 
 import com.laboratory.auth.observatorio.ia.config.IaProperties;
 import lombok.RequiredArgsConstructor;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -14,24 +15,35 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Cliente de OpenRouter. Unico punto de egreso del modulo: HU-09 exige que solo
- * exista trafico hacia los dominios permitidos del proveedor, nunca a internet.
+ * Cliente de OpenRouter. Alternativa al proveedor por defecto: solo se registra como
+ * bean si {@code ia.modelo.proveedor=openrouter}, de modo que nunca queden dos
+ * implementaciones de {@link ModeloCliente} compitiendo por inyeccion.
  *
- * <p>La API de OpenRouter es compatible con la de OpenAI, asi que el mismo cliente
- * sirve para /chat/completions y /embeddings sin dependencias adicionales.
+ * <p>Nota para quien configure esto: OpenRouter no ofrece ningun modelo de
+ * embeddings gratuito, asi que este proveedor no sirve para el tier sin costo. La API
+ * es compatible con la de OpenAI, asi que el mismo cliente sirve para
+ * /chat/completions y /embeddings sin dependencias adicionales.
  */
 @Component
 @RequiredArgsConstructor
-public class OpenRouterClient {
+@ConditionalOnProperty(name = "ia.modelo.proveedor", havingValue = "openrouter")
+public class OpenRouterClient implements ModeloCliente {
 
     private final IaProperties properties;
     private final ObjectMapper mapper = new ObjectMapper();
 
+    @Override
     public boolean disponible() {
         String key = properties.getModelo().getApiKey();
         return key != null && !key.isBlank();
     }
 
+    @Override
+    public String variableClave() {
+        return properties.getModelo().getVariableClave();
+    }
+
+    @Override
     public String generar(String sistema, String usuario) {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", properties.getModelo().getNombre());
@@ -39,11 +51,25 @@ public class OpenRouterClient {
         mensajes.add(mensaje("system", sistema));
         mensajes.add(mensaje("user", usuario));
         body.set("messages", mensajes);
-        body.put("temperature", 0.2);
-        body.put("max_tokens", 4096);
+        body.put("temperature", properties.getModelo().getTemperatura());
+        body.put("max_tokens", properties.getModelo().getMaxTokens());
 
         JsonNode respuesta = llamar("/chat/completions", body);
         return respuesta.path("choices").path(0).path("message").path("content").asText("").trim();
+    }
+
+    /**
+     * OpenRouter expone un solo modelo de embeddings, asi que la distincion entre
+     * documento y consulta no aplica: ambos roles van al mismo endpoint.
+     */
+    @Override
+    public float[] embedDocumento(String texto) {
+        return embed(texto);
+    }
+
+    @Override
+    public float[] embedConsulta(String texto) {
+        return embed(texto);
     }
 
     public float[] embed(String texto) {
@@ -71,16 +97,11 @@ public class OpenRouterClient {
     private JsonNode llamar(String ruta, ObjectNode body) {
         String base = properties.getModelo().getBaseUrl();
         // HU-09: bloquea cualquier egreso fuera del dominio permitido.
-        boolean permitido = properties.getModelo().getDominiosPermitidos().stream()
-                .anyMatch(base::contains);
-        if (!permitido) {
-            throw new IllegalStateException(
-                    "Destino de egreso no permitido por el alcance cerrado: " + base);
-        }
+        DominioPermitido.exigir(properties.getModelo().getDominiosPermitidos(), base);
         String key = properties.getModelo().getApiKey();
         if (key == null || key.isBlank()) {
-            throw new IllegalStateException(
-                    "Falta configurar ia.modelo.api-key (variable OPENROUTER_API_KEY)");
+            throw new IllegalStateException("Falta configurar la clave del modelo (variable "
+                    + variableClave() + ")");
         }
         try {
             String json = RestClient.builder().baseUrl(base).build()

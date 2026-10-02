@@ -5,7 +5,7 @@ import com.laboratory.auth.observatorio.ia.api.dto.BorradorResponse;
 import com.laboratory.auth.observatorio.ia.api.dto.ChatResponse;
 import com.laboratory.auth.observatorio.ia.api.dto.ConsultaResultado;
 import com.laboratory.auth.observatorio.ia.api.dto.FuenteRecuperada;
-import com.laboratory.auth.observatorio.ia.client.OpenRouterClient;
+import com.laboratory.auth.observatorio.ia.client.ModeloCliente;
 import com.laboratory.auth.observatorio.ia.conector.ExcelActivoConector;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -37,17 +37,29 @@ public class IaChatService {
      * Regla anti-invencion. Comparte el mismo texto en el chat y en los borradores para
      * que las dos rutas no puedan divergir.
      *
-     * <p>La parte de "el contexto es el inventario completo" no es decorativa: el
+     * <p>Hay dos fuentes autorizadas, no una: el Excel activo y los fragmentos de los
+     * documentos que carga el administrador. Declararlos a ambos como validos es lo que
+     * hace que una pregunta sobre un documento se responda con ese documento. Con una
+     * sola fuente el modelo rechazaba responder desde el PDF y decia que el dato no
+     * existia, porque solo buscaba en el Excel.
+     *
+     * <p>La parte de "el Excel es el inventario completo" no es decorativa: el
      * conector garantiza que todas las hojas y columnas del Excel activo llegan al
      * modelo, asi que puede afirmar con certeza que un campo no existe.
      */
     private static final String REGLAS_FUENTE = """
             Eres el asistente del Observatorio de Investigacion. Responde en espanol, claro y breve.
 
-            FUENTE UNICA
-            - La unica fuente de datos es el Excel ACTIVO que se indica en el contexto.
-            - Ese Excel es el inventario completo del archivo: si un campo no aparece en el
-              contexto, no existe en el archivo. Puedes afirmar que no existe.
+            FUENTES AUTORIZADAS
+            Hay dos fuentes autorizadas, y las dos sirven para responder:
+            - El Excel ACTIVO del Observatorio, para las cifras del Observatorio (proyectos,
+              grupos, investigadores, fechas). Su inventario completo viene en el contexto:
+              si un campo no aparece ahi, ese dato no existe en el archivo y puedes
+              afirmar que no existe.
+            - Los "Fragmentos autorizados", que son texto real de los documentos que el
+              administrador ha cargado. Si un fragmento responde la pregunta, ESA es la
+              respuesta: responde con el contenido del fragmento y citalo con su referencia
+              [documento (pagina N)]. No digas que no sabes por no estar en el Excel.
             - No uses tu conocimiento general sobre el tema, ni informacion de archivos
               anteriores, ni de internet.
 
@@ -55,32 +67,36 @@ public class IaChatService {
             - No inventes cifras, proyectos, investigadores, grupos, fechas, identificadores
               ni relaciones entre datos.
             - No completes un dato faltante con un valor plausible ni lo estimas.
-            - No presentes como dato del archivo ninguna afirmacion que no puedas senalar
-              literalmente en el contexto.
+            - No presentes como dato de ninguna fuente ninguna afirmacion que no puedas
+              senalar literalmente en el contexto.
 
             CUANDO FALTE INFORMACION
-            - Si el dato no esta en el Excel, dilo en primera persona y explica cual falta:
-              "No puedo determinar <lo que se pregunta> porque el archivo activo no contiene
-              <el campo o relacion que se necesita>."
+            - Aplica esta regla SOLO cuando la respuesta no este ni en el Excel ni en los
+              fragmentos. Dilo en primera persona y explica cual falta:
+              "No puedo determinar <lo que se pregunta> porque no aparece ni en el archivo
+              activo ni en los documentos cargados (<el campo o la relacion que falta>)."
+            - Si un fragmento documental contiene la respuesta, no apliques esta regla:
+              usalo y citalo.
             - Si los datos son insuficientes para responder, explica que falta y por que.
             - Si la pregunta es ambigua, enumera las interpretaciones posibles y que dato
               resolveria cada una, en vez de elegir una en silencio.
-            - Ante la duda, responde "no se encuentra en el archivo activo" antes que una
-              respuesta aproximada. Es preferible no responder a responder mal.
+            - Ante la duda, responde "no se encuentra en las fuentes autorizadas" antes que
+              una respuesta aproximada. Es preferible no responder a responder mal.
 
             SEPARAR DATO DE CONCLUSION
-            - Cuando respondas con informacion del archivo, usa estas dos secciones:
-              DATOS ENCONTRADOS: los hechos que aparecen literalmente en el Excel, citando
-              la hoja y la columna cuando corresponda.
+            - Cuando respondas con informacion de una fuente, usa estas dos secciones:
+              DATOS ENCONTRADOS: los hechos que aparecen literalmente en el Excel o en un
+              fragmento, citando la hoja y la columna cuando venga del Excel, y el
+              documento y la pagina cuando venga de un fragmento.
               DEDUCCIONES: tus interpretaciones, calculos o conclusiones a partir de esos
-              datos. Nada de las deducciones puede presentarse como un dato del archivo.
+              datos. Nada de las deducciones puede presentarse como un dato de la fuente.
             - Si no tienes nada que deducier, escribe "DEDUCCIONES: ninguna".
             """;
 
     private static final Pattern TABLA =
             Pattern.compile("\\b(?:from|join)\\s+([a-zA-Z_][a-zA-Z0-9_]*)", Pattern.CASE_INSENSITIVE);
 
-    private final OpenRouterClient modelo;
+    private final ModeloCliente modelo;
     private final TextToSqlService textToSql;
     private final RagService rag;
     private final IndicadorService indicadores;
@@ -93,6 +109,16 @@ public class IaChatService {
     /** Fuente declarada de todo lo que el asistente responde, para mostrarla en pantalla. */
     public String fuente() {
         return excelActivo.etiquetaFuente();
+    }
+
+    /**
+     * Aviso de clave ausente. Nombra la variable configurada, no una fija: el nombre
+     * del proveedor es configurable y un mensaje que dijera OPENROUTER_API_KEY con la
+     * API de Google apuntaria al sitio equivocado donde buscar la clave.
+     */
+    private String sinClave() {
+        return "El asistente no tiene configurada la clave del modelo ("
+                + modelo.variableClave() + "). Contacte al administrador del sistema.";
     }
 
     public ChatResponse responder(String email, String rol, String pregunta, String idConversacion) {
@@ -116,8 +142,7 @@ public class IaChatService {
                                    long inicio) {
         if (!modelo.disponible()) {
             return registrar(email, rol, pregunta, List.of(), "", false,
-                    "El asistente no tiene configurada la clave del modelo (OPENROUTER_API_KEY). "
-                            + "Contacte al administrador del sistema.", inicio);
+                    sinClave(), inicio);
         }
         if (pregunta == null || pregunta.isBlank()) {
             return registrar(email, rol, pregunta, List.of(), "", true,
@@ -231,7 +256,7 @@ public class IaChatService {
                 + "\n\n" + contexto + "\n" + contextoDocumental(fuentes, List.of());
         String borrador = modelo.disponible()
                 ? modelo.generar(sistema, LEYENDA_IA + "\n\n" + usuario)
-                : "El asistente no tiene configurada la clave del modelo (OPENROUTER_API_KEY).";
+                : sinClave();
         List<String> citas = new ArrayList<>(fuentes.stream().map(FuenteRecuperada::cita).toList());
         auditoria.registrar(email, rol, "Borrador: " + request.tema(), fuentes, "",
                 borrador, true, System.currentTimeMillis() - inicio);
@@ -242,7 +267,10 @@ public class IaChatService {
                            List<FuenteRecuperada> fuentes) {
         String sistema = REGLAS_FUENTE + "\n"
                 + "- Cuando cites un fragmento documental, menciona el documento y su referencia.\n"
-                + "- Cierra siempre con la linea: Fuente: <nombre del Excel activo>.\n"
+                + "- Cierra siempre con una linea 'Fuente:' que nombre SOLO lo que usaste: el\n"
+                + "  Excel activo si respondiste con sus cifras, y los documentos citados si\n"
+                + "  respondiste con fragmentos. No pongas el Excel si tu respuesta vino de un\n"
+                + "  documento.\n"
                 + "- La respuesta es interna al Observatorio: no la redactes como un texto\n"
                 + "  dirigido a un destinatario externo.";
         StringBuilder sb = new StringBuilder();

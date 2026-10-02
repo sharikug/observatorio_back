@@ -2,11 +2,12 @@ package com.laboratory.auth.observatorio.ia.service;
 
 import com.laboratory.auth.observatorio.ia.api.dto.Fragmento;
 import com.laboratory.auth.observatorio.ia.api.dto.FuenteRecuperada;
-import com.laboratory.auth.observatorio.ia.client.OpenRouterClient;
+import com.laboratory.auth.observatorio.ia.client.ModeloCliente;
 import com.laboratory.auth.observatorio.ia.config.IaProperties;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -33,7 +34,7 @@ public class RagService {
     public static final String ERROR = "ERROR";
 
     private final JdbcTemplate jdbc;
-    private final OpenRouterClient modelo;
+    private final ModeloCliente modelo;
     private final IaProperties properties;
 
     /**
@@ -56,14 +57,22 @@ public class RagService {
                         + "(id_documento, nombre, tipo, fuente, autorizado, roles_permitidos, estado, fecha_carga, usuario) "
                         + "VALUES (?, ?, ?, ?, TRUE, ?, ?, ?, ?)",
                 id, nombre, tipo, fuente, rolesCsv, PENDIENTE, ahora, usuario);
-        int orden = 0;
         try {
-            for (Fragmento f : fragmentos) {
-                float[] vector = modelo.embed(f.contenido());
+            // Un lote por documento: a una llamada HTTP por fragmento, el tier gratuito
+            // del proveedor se agota antes de terminar un archivo de cien fragmentos.
+            List<String> contenidos = fragmentos.stream().map(Fragmento::contenido).toList();
+            float[][] vectores = modelo.embedDocumentosLote(contenidos);
+            if (vectores.length != fragmentos.size()) {
+                throw new IllegalStateException("El proveedor devolvio " + vectores.length
+                        + " embeddings para " + fragmentos.size() + " fragmentos");
+            }
+            int orden = 0;
+            for (int i = 0; i < fragmentos.size(); i++) {
+                Fragmento f = fragmentos.get(i);
                 jdbc.update("INSERT INTO ia_fragmento "
                                 + "(id_documento, orden, contenido, referencia, embedding, roles_permitidos) "
                                 + "VALUES (?, ?, ?, ?, ?, ?)",
-                        id, orden++, f.contenido(), f.referencia(), serializar(vector), rolesCsv);
+                        id, orden++, f.contenido(), f.referencia(), serializar(vectores[i]), rolesCsv);
             }
         } catch (RuntimeException e) {
             jdbc.update("DELETE FROM ia_fragmento WHERE id_documento = ?", id);
@@ -87,8 +96,13 @@ public class RagService {
      * la propia consulta, antes de leer el contenido (HU-08).
      */
     public List<FuenteRecuperada> recuperar(String consulta, String rol) {
-        float[] objetivo = modelo.embed(consulta);
+        // El rol del embedding importa: el modelo trata distinto el texto que se indexa
+        // y el que busca, y usar el equivocado degrada la recuperacion en silencio.
+        float[] objetivo = modelo.embedConsulta(consulta);
         List<FuenteRecuperada> puntuadas = new ArrayList<>();
+        // Vectores de otra dimension: guardarlos sin avisar daria citas ordenadas al
+        // azar. Se cuentan para poder distinguir "no hay nada" de "hay que reindexar".
+        int[] incompatibles = new int[1];
         jdbc.query("SELECT f.contenido, f.referencia, f.embedding, d.roles_permitidos, "
                         + "d.id_documento, d.nombre "
                         + "FROM ia_fragmento f JOIN ia_documento d ON d.id_documento = f.id_documento "
@@ -100,11 +114,24 @@ public class RagService {
                         return;
                     }
                     float[] vector = deserializar(rs.getString("embedding"));
+                    if (vector.length != objetivo.length) {
+                        incompatibles[0]++;
+                        return;
+                    }
                     double score = coseno(objetivo, vector);
                     puntuadas.add(new FuenteRecuperada(
                             rs.getString("id_documento"), rs.getString("nombre"),
                             rs.getString("referencia"), rs.getString("contenido"), score));
                 }, DISPONIBLE);
+        if (puntuadas.isEmpty() && incompatibles[0] > 0) {
+            // Cambiar de modelo de embedding deja vectores de otra dimension en la base.
+            // Fallar con un mensaje que diga que reindexar es mejor que devolver una
+            // respuesta sin fuentes: el asistente no puede citar lo que no encuentra.
+            throw new IllegalStateException("Los " + incompatibles[0] + " fragmentos almacenados "
+                    + "tienen una dimension distinta a la del modelo configurado ("
+                    + objetivo.length + "). Vuelva a cargar los documentos para reindexarlos "
+                    + "con el modelo de embeddings actual.");
+        }
         puntuadas.sort((a, b) -> Double.compare(b.score(), a.score()));
         int max = properties.getModelo().getMaxFragmentos();
         return puntuadas.size() > max ? puntuadas.subList(0, max) : puntuadas;
@@ -120,6 +147,26 @@ public class RagService {
                         + "WHERE autorizado = TRUE AND estado = ?",
                 (rs, i) -> rs.getString(1), DISPONIBLE);
         return (int) visibles.stream().filter(r -> !puedeVer(r, rol)).count();
+    }
+
+    /**
+     * Elimina un documento junto con todos sus fragmentos. Devuelve false si el
+     * documento no existia, para que el endpoint pueda distinguir "no habia nada" de
+     * "no se pudo borrar".
+     *
+     * <p>Los fragmentos van primero y en la misma transaccion porque entre las dos
+     * tablas no hay clave foranea: al borrar solo el documento quedarian vectores
+     * huerfanos, invisibles para la recuperacion pero presentes en la base, y ademas
+     * contarian como vectores incompatibles en el aviso de "reindexe el documento".
+     * Es una operacion definitiva: el texto y los embeddings no se pueden recuperar.
+     */
+    @Transactional
+    public boolean eliminar(String id) {
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("Falta el identificador del documento");
+        }
+        jdbc.update("DELETE FROM ia_fragmento WHERE id_documento = ?", id);
+        return jdbc.update("DELETE FROM ia_documento WHERE id_documento = ?", id) > 0;
     }
 
     public List<java.util.Map<String, Object>> documentos() {

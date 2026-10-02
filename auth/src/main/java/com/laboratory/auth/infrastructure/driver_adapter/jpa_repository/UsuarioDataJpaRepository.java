@@ -6,7 +6,6 @@ import java.util.Optional;
 
 public interface UsuarioDataJpaRepository extends JpaRepository<UsuarioData,Long> {
     Optional<UsuarioData> findByEmail(String email);
-    Optional<UsuarioData> findByIdcard(String idcard);
     boolean existsByEmail(String email);
     boolean existsByIdcard(String idcard);
 }

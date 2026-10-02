@@ -1,7 +1,7 @@
 package com.laboratory.auth.observatorio.ia.service;
 
 import com.laboratory.auth.observatorio.ia.api.dto.ConsultaResultado;
-import com.laboratory.auth.observatorio.ia.client.OpenRouterClient;
+import com.laboratory.auth.observatorio.ia.client.ModeloCliente;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -40,7 +40,7 @@ public class TextToSqlService {
     private static final Pattern LIMITE = Pattern.compile("\\blimit\\b", Pattern.CASE_INSENSITIVE);
 
     private final JdbcTemplate jdbc;
-    private final OpenRouterClient modelo;
+    private final ModeloCliente modelo;
 
     private volatile String esquemaCache;
 

@@ -10,6 +10,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -101,6 +102,22 @@ public class IaAdminController {
     @GetMapping("/documentos")
     public List<Map<String, Object>> documentos() {
         return ragService.documentos();
+    }
+
+    /**
+     * Retira una fuente del indice. Es definitivo: se borra el documento y sus
+     * fragmentos, y no queda copia del texto ni de los embeddings. Por eso la
+     * interfaz pide confirmacion antes de llamarlo.
+     */
+    @DeleteMapping("/documentos/{id}")
+    public Map<String, Object> eliminarDocumento(@PathVariable String id) {
+        // El nombre se lee antes de borrar: es la unica forma de confirmar en la
+        // respuesta que documento se elimino, porque ya no queda registro del id.
+        String nombre = String.valueOf(ragService.estado(id).getOrDefault("nombre", id));
+        if (!ragService.eliminar(id)) {
+            throw new IllegalArgumentException("El documento no existe");
+        }
+        return Map.of("mensaje", "Documento eliminado", "nombre", nombre);
     }
 
     /** HU-06: estado de indexacion de un documento concreto. */

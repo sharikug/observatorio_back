@@ -47,6 +47,10 @@ public class SecurityConfig {
                                 "/api/observatorio/reportes/*/descargar").authenticated()
                         .requestMatchers(HttpMethod.POST, "/api/ia/documentos",
                                 "/api/ia/contenido").hasRole("ADMINISTRADOR")
+                        // Borrar una fuente es tan sensible como cargarla: si esta regla
+                        // faltara, el authenticated() de abajo permitiria que cualquier
+                        // estudiante borrara el indice por el endpoint.
+                        .requestMatchers(HttpMethod.DELETE, "/api/ia/documentos/**").hasRole("ADMINISTRADOR")
                         .requestMatchers("/api/ia/auditoria/**", "/api/ia/auditoria").hasRole("ADMINISTRADOR")
                         // El chat es publico: se entra al modulo y se pregunta, sin login.
                         // El aislamiento entre visitantes lo da X-Anon-Id, y el rol siempre
